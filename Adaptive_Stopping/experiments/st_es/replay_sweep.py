@@ -157,7 +157,8 @@ def main(argv=None):
     rows = [{"kind": "standard", "key": "standard", "tag": None, "delta": None, "k": None, "n": n,
              "accuracy": std_acc, "mean_tokens": std_tokens, "saved_pct": 0.0, "stop_rate": 0.0,
              "mean_answer_tokens": 0.0}]
-    per_example = []
+    per_example = [{"key": "standard", "uid": p["rec"]["uid"], "stopped": False, "cut": None,
+                    "tokens": p["rec"]["n_gen_tokens"], "correct": int(p["base_correct"])} for p in prepared]
     for c in configs:
         acc = tok_sum = ans_sum = stops = 0
         for p in prepared:

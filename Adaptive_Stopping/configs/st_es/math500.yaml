@@ -20,4 +20,4 @@ grid:
 targets: [0.85, 0.90, 0.95]
 exit_prompt_id: exit_boxed.v1
 answer_budget: 100
-live: {num_samples: 15, targets: [0.90], kinds: [st_es]}
+live: {num_samples: 10, targets: [0.90], kinds: [st_es]}   # ~4k-token traces at ~26 tok/s (batch 1)

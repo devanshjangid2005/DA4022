@@ -64,6 +64,24 @@ def read_csv(path: Path) -> list[dict]:
     return rows
 
 
+def paired_bootstrap(per_example: Path, key_a: str, key_b: str, n_boot: int = 2000, seed: int = 0) -> dict:
+    """95% paired-bootstrap CI of accuracy(key_a) - accuracy(key_b) over the same problems."""
+    import random
+
+    with open(per_example, encoding="utf-8") as fh:
+        rows = list(csv.DictReader(fh))
+    a = {r["uid"]: int(r["correct"]) for r in rows if r["key"] == key_a}
+    b = {r["uid"]: int(r["correct"]) for r in rows if r["key"] == key_b}
+    uids = sorted(set(a) & set(b))
+    if not uids:
+        raise ValueError(f"{per_example}: no paired rows for {key_a!r} and {key_b!r} (re-run replay_sweep)")
+    diffs = [a[u] - b[u] for u in uids]
+    rng = random.Random(seed)
+    boots = sorted(sum(rng.choice(diffs) for _ in diffs) / len(diffs) for _ in range(n_boot))
+    return {"diff": sum(diffs) / len(diffs), "ci_low": boots[int(0.025 * n_boot)], "ci_high": boots[int(0.975 * n_boot) - 1],
+            "n": len(uids), "a_only": sum(d > 0 for d in diffs), "b_only": sum(d < 0 for d in diffs)}
+
+
 def _style(ax):
     ax.set_facecolor(SURFACE)
     ax.grid(True, color=GRID, linewidth=0.6)
@@ -97,8 +115,9 @@ def plot_calibration(rows, selected, title, out):
         if t in highlight:
             c = SERIES[highlight.index(t)]
             ax.plot(xs, ys, color=c, lw=2, marker="o", ms=4, label=f"ST-ES: {t} (δ=0…20)", zorder=3)
-            ax.annotate(t, (xs[-1], ys[-1]), xytext=(4, 0), textcoords="offset points", color=INK2, fontsize=8,
-                        va="center")
+            # label the δ=0 end, where the curves are far apart (their δ=20 ends all meet the standard point)
+            ax.annotate(f"{t}, δ=0", (xs[0], ys[0]), xytext=(-6, 0), textcoords="offset points", color=INK2,
+                        fontsize=8, va="center", ha="right")
         else:
             ax.plot(xs, ys, color=AXIS, lw=1, zorder=2,
                     label="ST-ES: other step types" if t == next(x for x in tags if x not in highlight) else None)
@@ -136,8 +155,14 @@ def plot_test(rows, title, out):
             continue
         ax.plot([p["mean_tokens"] for p in pts], [p["accuracy"] for p in pts], color=SERIES[i], lw=2, marker=marker,
                 ms=8, label=label, zorder=3, markeredgecolor=SURFACE, markeredgewidth=2)
-        for p in pts:
-            ax.annotate(f"{int(round(100 * p['target']))}%", (p["mean_tokens"], p["accuracy"]), xytext=(6, -3),
+        by_key: dict[str, list] = {}
+        for p in pts:  # several targets can select the same configuration: one label per point
+            by_key.setdefault(p["key"], []).append(p)
+        for group in by_key.values():
+            p = group[0]
+            name = "/".join(str(int(round(100 * q["target"]))) for q in group) + "%"
+            desc = f"{p['tag']}, δ={p['delta']}" if kind == "st_es" else f"k={p['k']}"
+            ax.annotate(f"{name}  ({desc})", (p["mean_tokens"], p["accuracy"]), xytext=(8, -3),
                         textcoords="offset points", color=INK2, fontsize=8)
     ax.plot([std["mean_tokens"]], [std["accuracy"]], marker="*", ms=14, color=INK, ls="none", label="standard",
             zorder=4)
@@ -184,13 +209,32 @@ def main(argv=None):
             expanded.append({**r, "target": None})
         for t in r.get("targets", []):
             expanded.append({**r, "target": t})
+    # paired 95% bootstrap CIs on the held-out split: each config vs standard, and ST-ES vs step-count per target
+    pe = rep["evaluation"] / "selected" / "per_example.csv"
+    for r in expanded:
+        if r["kind"] != "standard":
+            ci = paired_bootstrap(pe, r["key"], "standard")
+            r.update({"acc_diff_vs_standard": round(ci["diff"], 4), "ci95_low": round(ci["ci_low"], 4),
+                      "ci95_high": round(ci["ci_high"], 4)})
+    st_vs_sc = {}
+    for t in sel["targets"]:
+        a = (sel["selected"]["st_es"].get(str(t)) or {}).get("key")
+        b = (sel["selected"]["step_count"].get(str(t)) or {}).get("key")
+        if a and b:
+            st_vs_sc[str(t)] = {"st_es": a, "step_count": b, **paired_bootstrap(pe, a, b)}
 
     ds = cfg["evaluation"]["dataset_id"]
     out = REPO / "Adaptive_Stopping" / "experiments" / "st_es" / "results" / ds
     out.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(rep["calibration"] / "grid" / "sweep.csv", out / "calibration_sweep.csv")
     fields = ["kind", "key", "target", "tag", "delta", "k", "n", "accuracy", "mean_tokens", "saved_pct", "stop_rate",
-              "mean_answer_tokens"]
+              "mean_answer_tokens", "acc_diff_vs_standard", "ci95_low", "ci95_high"]
+    write_json(out / "paired_comparisons.json", {
+        "method": "paired bootstrap over the same held-out problems, 2000 resamples, seed 0; diff = accuracy(a) - accuracy(b)",
+        "st_es_vs_step_count": st_vs_sc,
+        "config_vs_standard": {f"{r['key']}@{r['target']}": {k: r[k] for k in ("acc_diff_vs_standard", "ci95_low", "ci95_high")}
+                               for r in expanded if r["kind"] != "standard"},
+    })
     with open(out / "test_selected.csv", "w", newline="", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=fields, extrasaction="ignore")
         w.writeheader()
