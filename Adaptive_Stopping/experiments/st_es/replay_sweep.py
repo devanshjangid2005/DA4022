@@ -58,12 +58,13 @@ def main(argv=None):
     ap.add_argument("--backbone-id", default="text.deepseek-r1-distill-qwen-1.5b")
     ap.add_argument("--device", default="cuda")
     ap.add_argument("--max-examples", type=int, default=None, help="debug: only the first N traces")
+    ap.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
     args = ap.parse_args(argv)
 
     # <run_dir>/replay/<dataset>/<traces stem>/{grid|selected}; the forced-answer cache sits one level up,
     # so it is shared by the grid and selected runs of the same trace file (and only of that file).
     mode = "selected" if args.selected else "grid"
-    out_dir = args.out_dir or (DEFAULT_RUN_DIR / "replay" / args.traces.parent.name / args.traces.stem / mode)
+    out_dir = args.out_dir or (args.run_dir / "replay" / args.traces.parent.name / args.traces.stem / mode)
     out_dir.mkdir(parents=True, exist_ok=True)
     records = list(read_jsonl(args.traces))[: args.max_examples]
     bb = HFCausalLMBackbone(get_backbone_entry(args.backbone_id))

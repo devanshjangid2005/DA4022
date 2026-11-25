@@ -74,6 +74,7 @@ def main(argv=None):
     ap.add_argument("--kinds", nargs="+", default=["st_es"], choices=["st_es", "step_count"])
     ap.add_argument("--backbone-id", default="text.deepseek-r1-distill-qwen-1.5b")
     ap.add_argument("--out-dir", type=Path, default=None)
+    ap.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
     ap.add_argument("--only-uids", nargs="*", default=None, help="diagnostics: run only these example uids")
     args = ap.parse_args(argv)
 
@@ -88,7 +89,7 @@ def main(argv=None):
             cfg = {"kind": row["kind"], "tag": row["tag"], "delta": row["delta"], "k": row["k"]}
             policies.append((f"{kind}@{t:.2f}:{row['key']}", cfg))
 
-    out_dir = args.out_dir or (DEFAULT_RUN_DIR / "live" / args.dataset_id / f"n{args.num_samples}_s{args.seed}")
+    out_dir = args.out_dir or (args.run_dir / "live" / args.dataset_id / f"n{args.num_samples}_s{args.seed}")
     out_dir.mkdir(parents=True, exist_ok=True)
     req_path = out_dir / "requests.jsonl"
     if req_path.exists():

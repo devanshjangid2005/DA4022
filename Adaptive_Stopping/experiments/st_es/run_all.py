@@ -64,15 +64,15 @@ def main(argv=None):
     cal_dir = args.run_dir / "replay" / traces["calibration"].parent.name / traces["calibration"].stem / "grid"
     if "calibrate" in args.stages:
         run("replay_sweep", "--traces", traces["calibration"], "--select-targets",
-            "--exit-prompt-id", cfg["exit_prompt_id"])
+            "--exit-prompt-id", cfg["exit_prompt_id"], "--run-dir", args.run_dir)
     if "evaluate" in args.stages:
         run("replay_sweep", "--traces", traces["evaluation"], "--selected", cal_dir / "selected.json",
-            "--exit-prompt-id", cfg["exit_prompt_id"])
+            "--exit-prompt-id", cfg["exit_prompt_id"], "--run-dir", args.run_dir)
     if "live" in args.stages:
         lv = cfg["live"]
         run("live_benchmark", "--dataset-id", cfg["evaluation"]["dataset_id"], "--num-samples", lv["num_samples"],
             "--seed", seed, "--max-new-tokens", cap, "--prompt-id", prompt, "--selected", cal_dir / "selected.json",
-            "--targets", *lv["targets"], "--kinds", *lv["kinds"])
+            "--targets", *lv["targets"], "--kinds", *lv["kinds"], "--run-dir", args.run_dir)
 
 
 if __name__ == "__main__":
