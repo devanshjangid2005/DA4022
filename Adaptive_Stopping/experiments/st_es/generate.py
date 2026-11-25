@@ -52,11 +52,14 @@ def main(argv=None):
     # Defaults sized for an 8 GB GPU holding the 3.55 GB bf16 1.5B model. On Windows (WDDM), going over the
     # dedicated memory does not raise OOM: it spills into shared system memory and generation slows down
     # several-fold, so the budget leaves headroom. KV cost of this model: ~28 KB per token.
-    ap.add_argument("--chunk-tokens", type=int, default=2048)
+    # The HF DynamicCache grows by concatenation every step, which fragments the caching allocator
+    # (observed: ~1.1 GB reserved-but-unused at a 1.5 GB KV cache), so rounds are kept short and the
+    # allocator is emptied between rounds. `expandable_segments` is not supported on Windows.
+    ap.add_argument("--chunk-tokens", type=int, default=1024)
     ap.add_argument("--max-batch", type=int, default=32)
-    ap.add_argument("--kv-token-budget", type=int, default=64_000)
-    ap.add_argument("--gpu-memory-fraction", type=float, default=0.78,
-                    help="cap for PyTorch's caching allocator (fraction of total GPU memory); 0 disables")
+    ap.add_argument("--kv-token-budget", type=int, default=40_000)
+    ap.add_argument("--gpu-memory-fraction", type=float, default=0.0,
+                    help="optional hard cap for PyTorch's caching allocator (fraction of GPU memory); 0 = no cap")
     ap.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args(argv)
@@ -106,6 +109,7 @@ def main(argv=None):
                      "alloc_conf": os.environ.get("PYTORCH_CUDA_ALLOC_CONF")},
         "backbone": bb.get_model_metadata(), "environment": environment_metadata(),
         "throughput_stats": {**stats, "note": "batched cached generation; throughput only, not request latency"},
+        "records_reused_from_earlier_run": len(done),  # >0 means this run resumed an interrupted one
         "started_unix": t0,
     }
     write_json(out.with_suffix(".manifest.json"), manifest)

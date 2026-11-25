@@ -111,10 +111,10 @@ def generate_full_traces(
     max_new_tokens: int,
     seed: int,
     sampling: dict,
-    chunk_tokens: int = 2048,
+    chunk_tokens: int = 1024,
     min_done_frac: float = 0.75,
     max_batch: int = 32,
-    kv_token_budget: int = 72_000,
+    kv_token_budget: int = 40_000,
     on_finish: Callable[[GenJob], None] | None = None,
     log: Callable[[str], None] = print,
 ) -> dict:
@@ -175,8 +175,13 @@ def generate_full_traces(
                 on_finish(job)
         elapsed = time.perf_counter() - t0
         done = sum(j.finish_reason is not None for j in jobs)
+        mem = ""
+        if torch.cuda.is_available():
+            mem = (f" | peak alloc {torch.cuda.max_memory_allocated() / 2**30:.2f} GB"
+                   f" reserved {torch.cuda.max_memory_reserved() / 2**30:.2f} GB")
+            torch.cuda.reset_peak_memory_stats()
         log(f"round {stats['rounds']}: batch={len(batch)} ctx<={width} +{len(new[0]) if new else 0} tok | "
-            f"done {done}/{len(jobs)} | {stats['generated_tokens'] / max(elapsed, 1e-9):.0f} tok/s | {elapsed:.0f}s")
+            f"done {done}/{len(jobs)} | {stats['generated_tokens'] / max(elapsed, 1e-9):.0f} tok/s | {elapsed:.0f}s{mem}")
     stats["wall_s"] = time.perf_counter() - t0
     stats["tokens_per_s"] = stats["generated_tokens"] / max(stats["wall_s"], 1e-9)
     return stats
