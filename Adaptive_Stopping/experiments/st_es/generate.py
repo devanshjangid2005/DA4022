@@ -57,7 +57,7 @@ def main(argv=None):
     # `expandable_segments` is not supported on Windows.
     ap.add_argument("--chunk-tokens", type=int, default=1024)
     ap.add_argument("--max-batch", type=int, default=32)
-    ap.add_argument("--kv-token-budget", type=int, default=36_000)
+    ap.add_argument("--kv-token-budget", type=int, default=52_000)  # measured peak ~4.8 GB at 36k (cap 6.8 GB)
     ap.add_argument("--gpu-memory-fraction", type=float, default=0.85,
                     help="cap for PyTorch's caching allocator (fraction of GPU memory); 0 = no cap")
     ap.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
