@@ -88,6 +88,26 @@ def _sync():
 
 
 @torch.inference_mode()
+def continue_with_exit_prompt(model, tokenizer, out, *, eos_ids: Sequence[int], pad_id: int,
+                              exit_prompt_id: str = "exit_boxed.v1",
+                              answer_budget: int = ANSWER_BUDGET) -> list[int]:
+    """Forced answer after a stop, reusing the KV cache of ``out`` (a ``generate`` result with
+    ``return_dict_in_generate=True``). Falls back to a fresh prefill when no cache is returned."""
+    device = out.sequences.device
+    exit_ids = tokenizer(EXIT_PROMPTS[exit_prompt_id], add_special_tokens=False)["input_ids"]
+    full = torch.cat([out.sequences, torch.tensor([exit_ids], device=device)], dim=1)
+    cache = getattr(out, "past_key_values", None)
+    box = BoxCloseCriteria(tokenizer, eos_ids, full.shape[1], 1)
+    kwargs = {"cache": cache} if cache is not None else {}
+    out2 = model.generate(input_ids=full, attention_mask=torch.ones_like(full), max_new_tokens=answer_budget,
+                          do_sample=False, temperature=None, top_p=None, top_k=None, stopping_criteria=[box],
+                          eos_token_id=list(eos_ids), pad_token_id=pad_id, **kwargs)
+    new = out2[0, full.shape[1]:].tolist()
+    stop = box.stop_len[0]
+    return new[:stop] if stop is not None else new[:answer_budget]
+
+
+@torch.inference_mode()
 def generate_with_policy(model, tokenizer, prompt_ids: Sequence[int], policy: StoppingPolicy | None, *,
                          max_new_tokens: int, sampling: dict, seed: int, eos_ids: Sequence[int], pad_id: int,
                          exit_prompt_id: str = "exit_boxed.v1", answer_budget: int = ANSWER_BUDGET,
@@ -119,19 +139,10 @@ def generate_with_policy(model, tokenizer, prompt_ids: Sequence[int], policy: St
     stopped = bool(crit and crit.stopped)
     if stopped:
         finish = "policy"
-        exit_ids = tokenizer(EXIT_PROMPTS[exit_prompt_id], add_special_tokens=False)["input_ids"]
-        full = torch.cat([seq, torch.tensor([exit_ids], device=device)], dim=1)
-        cache = getattr(out, "past_key_values", None)
-        box = BoxCloseCriteria(tokenizer, eos_ids, full.shape[1], 1)
-        kwargs = {"cache": cache} if cache is not None else {}
-        out2 = model.generate(input_ids=full, attention_mask=torch.ones_like(full), max_new_tokens=answer_budget,
-                              do_sample=False, temperature=None, top_p=None, top_k=None, stopping_criteria=[box],
-                              eos_token_id=list(eos_ids), pad_token_id=pad_id, **kwargs)
+        answer_ids = continue_with_exit_prompt(model, tokenizer, out, eos_ids=eos_ids, pad_id=pad_id,
+                                               exit_prompt_id=exit_prompt_id, answer_budget=answer_budget)
         _sync()
         t2 = time.perf_counter()
-        new = out2[0, full.shape[1]:].tolist()
-        stop = box.stop_len[0]
-        answer_ids = new[:stop] if stop is not None else new[:answer_budget]
     return {
         "gen_ids": gen, "finish_reason": finish, "stopped": stopped, "stop_step": crit.stop_step if crit else None,
         "cut": crit.cut if crit else None, "answer_ids": answer_ids, "n_generated": len(gen) + len(answer_ids),

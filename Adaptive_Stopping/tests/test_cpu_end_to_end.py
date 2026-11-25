@@ -128,6 +128,26 @@ def test_live_policy_stop_matches_replay(tiny):
     assert rep.cut_tokens == live["cut"]
 
 
+def test_live_forced_answer_equals_fresh_prefill(tiny):
+    """The live path reuses generate()'s KV cache for the forced answer; it must match a fresh prefill."""
+    import copy
+
+    from Adaptive_Stopping.common.live_generation import continue_with_exit_prompt
+
+    tok, model, _ = tiny
+    prompt = tok("solve: 12*3", add_special_tokens=False)["input_ids"]
+    for seed, n in [(0, 5), (1, 9), (2, 14)]:
+        ids = torch.tensor([prompt])
+        torch.manual_seed(seed)
+        out = model.generate(input_ids=ids, attention_mask=torch.ones_like(ids), max_new_tokens=n, do_sample=True,
+                             temperature=1.0, top_p=1.0, top_k=0, eos_token_id=[EOS], pad_token_id=PAD,
+                             return_dict_in_generate=True)
+        gen = out.sequences[0, len(prompt):].tolist()
+        live = continue_with_exit_prompt(model, tok, out, eos_ids=[EOS], pad_id=PAD, answer_budget=8)
+        fresh = force_answers(model, tok, [prompt + gen], eos_ids=[EOS], pad_id=PAD, max_new_tokens=8)[0]
+        assert live == fresh, (seed, live, fresh)
+
+
 def test_step_policy_criteria_simulated_generate(tiny):
     tok, _, _ = tiny
     text = "Okay, so I need to find x.\n\nWait, let me check this.\n\nYes, that matches.\n\nmore"

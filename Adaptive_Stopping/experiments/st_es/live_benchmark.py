@@ -32,6 +32,8 @@ import torch
 from Adaptive_Stopping.baselines.step_count import StepCountStopping
 from Adaptive_Stopping.common.forced_answer import answer_text
 from Adaptive_Stopping.common.live_generation import generate_with_policy
+from Adaptive_Stopping.common.replay import replay_policy
+from Adaptive_Stopping.common.steps import segment_token_ids
 from Adaptive_Stopping.experiments.st_es.io_utils import DEFAULT_RUN_DIR, append_jsonl, environment_metadata, write_json
 from Adaptive_Stopping.methods.step_tagging.policy import StepTagEarlyStopping
 from Backbones.Task_Finetuned.hf_causal_lm import HFCausalLMBackbone
@@ -70,6 +72,7 @@ def main(argv=None):
     ap.add_argument("--kinds", nargs="+", default=["st_es"], choices=["st_es", "step_count"])
     ap.add_argument("--backbone-id", default="text.deepseek-r1-distill-qwen-1.5b")
     ap.add_argument("--out-dir", type=Path, default=None)
+    ap.add_argument("--only-uids", nargs="*", default=None, help="diagnostics: run only these example uids")
     args = ap.parse_args(argv)
 
     sel = json.loads(args.selected.read_text(encoding="utf-8"))
@@ -90,6 +93,8 @@ def main(argv=None):
         req_path.unlink()
 
     examples = load_math_reasoning(args.dataset_id, args.num_samples, args.seed, 0)
+    if args.only_uids:
+        examples = [ex for ex in examples if ex.uid in set(args.only_uids)]
     bb = HFCausalLMBackbone.from_registry(args.backbone_id, device="cuda")
     tok, model = bb.tokenizer, bb.model
     gc = model.generation_config
@@ -114,9 +119,13 @@ def main(argv=None):
             if res["stopped"]:
                 text = answer_text(tok, res["answer_ids"])
             res["correct"] = is_correct(text, ex.gold, ex.gold_format)
-            rec = {"uid": ex.uid, "policy": name, "config": cfg, "prompt_tokens": len(prompt),
-                   **{k: v for k, v in res.items() if k not in ("gen_ids", "answer_ids")},
-                   "answer_tokens": len(res["answer_ids"])}
+            if cfg is not None:
+                # audit: replaying the same policy offline on the live tokens must stop at the same token
+                rep = replay_policy(make_policy(cfg), segment_token_ids(res["gen_ids"], tok), len(res["gen_ids"]))
+                res["replay_cut"] = rep.cut_tokens if rep.stopped else None
+                res["replay_agrees"] = rep.stopped == res["stopped"] and (not rep.stopped or rep.cut_tokens == res["cut"])
+            rec = {"uid": ex.uid, "policy": name, "config": cfg, "prompt_tokens": len(prompt), **res,
+                   "answer_tokens": len(res["answer_ids"]), "scored_text_tail": text[-300:]}
             append_jsonl(req_path, rec)
             print(f"[{i + 1}/{len(examples)}] {name:40s} tok={res['n_generated']:5d} lat={res['latency_s']:.1f}s "
                   f"ok={int(res['correct'])} stop={res['stopped']} peak={res['peak_allocated_mb']:.0f}MB")
@@ -144,6 +153,7 @@ def main(argv=None):
             "policy_time_total_s": sum(r["policy_time_s"] for r in rs),
             "policy_time_per_step_ms": 1000 * sum(r["policy_time_s"] for r in rs) / max(1, sum(r["steps_seen"] or 0 for r in rs)),
             "stop_rate": sum(r["stopped"] for r in rs) / len(rs),
+            "replay_agreement": (sum(r.get("replay_agrees", False) for r in rs) / len(rs)) if cfg else None,
             "peak_allocated_mb_max": max(r["peak_allocated_mb"] for r in rs),
             "peak_reserved_mb_max": max(r["peak_reserved_mb"] for r in rs),
         }
