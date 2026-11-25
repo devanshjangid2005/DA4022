@@ -104,6 +104,8 @@ def _prefill_rows(model, ctxs: list[list[int]], width: int, device, max_new: int
     for li in range(len(ks)):
         cache.update(ks[li], vs[li], li)
         ks[li] = vs[li] = None  # free each prefix copy once it is in the static buffer
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()  # drop the per-row prefill temporaries before decoding (fragmentation)
     return cache
 
 
