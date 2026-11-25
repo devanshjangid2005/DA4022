@@ -88,13 +88,19 @@ def upsert_metric_rows(path: str | Path, rows: list[dict], id_prefix: str) -> No
 
 
 def git_commit(repo: str | Path) -> str:
-    """HEAD commit of ``repo``, with ``+dirty`` when tracked files are modified."""
+    """HEAD commit of ``repo``, with ``+dirty`` when tracked code/config files are modified.
+
+    Result folders are excluded from the check: report scripts rewrite them, so a
+    pending result file says nothing about the code that produced the numbers.
+    """
     import subprocess
 
     try:
         sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
                              check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo,
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no", "--", ".",
+                                ":(exclude)Adaptive_Stopping/experiments/st_es/results",
+                                ":(exclude)Performance_Metrics/results"], cwd=repo,
                                capture_output=True, text=True).stdout.strip()
         return sha + ("+dirty" if dirty else "")
     except Exception:
