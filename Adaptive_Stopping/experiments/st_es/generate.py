@@ -52,12 +52,12 @@ def main(argv=None):
     # Defaults sized for an 8 GB GPU holding the 3.55 GB bf16 1.5B model. On Windows (WDDM), going over the
     # dedicated memory does not raise OOM: it spills into shared system memory and generation slows down
     # several-fold, so the budget leaves headroom. KV cost of this model: ~28 KB per token.
-    # The HF DynamicCache grows by concatenation every step, which fragments the caching allocator
-    # (observed: ~1.1 GB reserved-but-unused at a 1.5 GB KV cache), so rounds are kept short and the
-    # allocator is emptied between rounds. `expandable_segments` is not supported on Windows.
+    # Each round decodes into a preallocated StaticCache (no per-step concatenation, so no allocator
+    # fragmentation); the budget bounds that cache: batch * (context + chunk) <= kv_token_budget.
+    # `expandable_segments` is not supported on Windows.
     ap.add_argument("--chunk-tokens", type=int, default=1024)
     ap.add_argument("--max-batch", type=int, default=32)
-    ap.add_argument("--kv-token-budget", type=int, default=40_000)
+    ap.add_argument("--kv-token-budget", type=int, default=56_000)
     ap.add_argument("--gpu-memory-fraction", type=float, default=0.0,
                     help="optional hard cap for PyTorch's caching allocator (fraction of GPU memory); 0 = no cap")
     ap.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
@@ -104,7 +104,8 @@ def main(argv=None):
         "dataset_id": args.dataset_id, "num_samples": args.num_samples, "offset": args.offset, "seed": args.seed,
         "prompt_id": args.prompt_id, "max_new_tokens": args.max_new_tokens, "sampling": sampling,
         "batching": {"chunk_tokens": args.chunk_tokens, "max_batch": args.max_batch,
-                     "kv_token_budget": args.kv_token_budget, "prefill": "per-row, assembled into a padded KV cache",
+                     "kv_token_budget": args.kv_token_budget,
+                     "prefill": "per-row, assembled into a left-padded StaticCache per round",
                      "gpu_memory_fraction": args.gpu_memory_fraction,
                      "alloc_conf": os.environ.get("PYTORCH_CUDA_ALLOC_CONF")},
         "backbone": bb.get_model_metadata(), "environment": environment_metadata(),

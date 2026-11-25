@@ -69,7 +69,7 @@ def _take_batch(pending: list[GenJob], max_batch: int, kv_budget: int, chunk: in
     return batch
 
 
-def _prefill_rows(model, ctxs: list[list[int]], width: int, device):
+def _prefill_rows(model, ctxs: list[list[int]], width: int, device, max_new: int):
     """KV cache for a left-padded batch, built by prefilling each row on its own.
 
     Row r occupies cache slots ``[width - len(ctx_r), width - 1)`` and holds the
@@ -78,8 +78,13 @@ def _prefill_rows(model, ctxs: list[list[int]], width: int, device):
     of the decode batch size. Each row is prefilled without padding, so its
     RoPE positions are 0..len-2, matching the positions ``generate`` derives
     from the attention mask for the following tokens.
+
+    The result is a ``StaticCache`` sized for the whole round
+    (``width - 1 + max_new + 1`` slots), so decoding writes in place instead of
+    concatenating a larger tensor every step (which fragments the allocator
+    and, on Windows, spills into shared system memory).
     """
-    from transformers import DynamicCache
+    from transformers import StaticCache
 
     decoder = model.get_decoder()
     ks = vs = None
@@ -95,9 +100,10 @@ def _prefill_rows(model, ctxs: list[list[int]], width: int, device):
             ks[li][r, :, width - 1 - n:] = layer.keys[0]
             vs[li][r, :, width - 1 - n:] = layer.values[0]
         del out, layers
-    cache = DynamicCache()
+    cache = StaticCache(config=model.config, max_cache_len=width + max_new)
     for li in range(len(ks)):
         cache.update(ks[li], vs[li], li)
+        ks[li] = vs[li] = None  # free each prefix copy once it is in the static buffer
     return cache
 
 
@@ -142,11 +148,12 @@ def generate_full_traces(
         remaining = [max_new_tokens - len(j.gen_ids) for j in batch]
         step_new = min(chunk_tokens, max(remaining))
         stopper = _RoundStop(eos_ids, min_done_frac, width)
-        cache = _prefill_rows(model, ctx, width, device)
+        cache = _prefill_rows(model, ctx, width, device, step_new)
         torch.manual_seed(seed * 1_000_003 + stats["rounds"])
         out = model.generate(
             input_ids=input_ids.to(device), attention_mask=attn.to(device), max_new_tokens=step_new, cache=cache,
-            eos_token_id=list(eos_ids), pad_token_id=pad_id, stopping_criteria=[stopper], **sampling,
+            eos_token_id=list(eos_ids), pad_token_id=pad_id, stopping_criteria=[stopper], disable_compile=True,
+            **sampling,
         )
         del cache
         new = out[:, width:].tolist()
