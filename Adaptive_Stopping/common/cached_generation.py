@@ -86,24 +86,24 @@ def _prefill_rows(model, ctxs: list[list[int]], width: int, device, max_new: int
     """
     from transformers import StaticCache
 
+    cfg = model.config
+    n_kv = cfg.num_key_value_heads
+    head_dim = getattr(cfg, "head_dim", None) or cfg.hidden_size // cfg.num_attention_heads
+    cache = StaticCache(config=cfg, max_cache_len=width + max_new)
+    # Allocate each layer's static buffer (zeros) and mark the first width-1 slots as filled; rows are then
+    # written into those buffers in place, so no batch-sized temporary copy is ever held next to the cache.
+    for li in range(cfg.num_hidden_layers):
+        z = torch.zeros((len(ctxs), n_kv, width - 1, head_dim), dtype=model.dtype, device=device)
+        cache.update(z, z, li)
+        del z
     decoder = model.get_decoder()
-    ks = vs = None
     for r, c in enumerate(ctxs):
         out = decoder(input_ids=torch.tensor([c[:-1]], device=device), use_cache=True)
-        layers = out.past_key_values.layers
-        if ks is None:
-            k0 = layers[0].keys
-            ks = [k0.new_zeros((len(ctxs), k0.shape[1], width - 1, k0.shape[3])) for _ in layers]
-            vs = [k0.new_zeros((len(ctxs), k0.shape[1], width - 1, k0.shape[3])) for _ in layers]
         n = len(c) - 1
-        for li, layer in enumerate(layers):
-            ks[li][r, :, width - 1 - n:] = layer.keys[0]
-            vs[li][r, :, width - 1 - n:] = layer.values[0]
-        del out, layers
-    cache = StaticCache(config=model.config, max_cache_len=width + max_new)
-    for li in range(len(ks)):
-        cache.update(ks[li], vs[li], li)
-        ks[li] = vs[li] = None  # free each prefix copy once it is in the static buffer
+        for li, layer in enumerate(out.past_key_values.layers):
+            cache.layers[li].keys[r, :, width - 1 - n:width - 1] = layer.keys[0]
+            cache.layers[li].values[r, :, width - 1 - n:width - 1] = layer.values[0]
+        del out
     if torch.cuda.is_available():
         torch.cuda.empty_cache()  # drop the per-row prefill temporaries before decoding (fragmentation)
     return cache
