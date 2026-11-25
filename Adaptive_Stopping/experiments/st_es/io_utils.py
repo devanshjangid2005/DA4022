@@ -62,5 +62,21 @@ def environment_metadata() -> dict:
     return meta
 
 
+def limit_gpu_memory(fraction: float = 0.85) -> None:
+    """Cap PyTorch's CUDA caching allocator at ``fraction`` of device memory.
+
+    On Windows (WDDM) an allocator that grows past dedicated memory does not
+    fail: it spills into shared system memory, which is backed by host commit
+    charge. In our runs this pushed one process to 16.5 GB of commit and grew
+    the page file until the system drive was almost full. With a cap, PyTorch
+    releases cached blocks and retries at the limit, and only raises OOM if the
+    memory is really needed.
+    """
+    import torch
+
+    if fraction and torch.cuda.is_available():
+        torch.cuda.set_per_process_memory_fraction(fraction)
+
+
 def rows_by_uid(records: Iterable[dict]) -> dict[str, dict]:
     return {r["uid"]: r for r in records}

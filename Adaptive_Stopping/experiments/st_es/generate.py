@@ -26,7 +26,7 @@ import torch  # noqa: E402  (after the allocator setting)
 
 from Adaptive_Stopping.common.cached_generation import GenJob, generate_full_traces
 from Adaptive_Stopping.experiments.st_es.io_utils import (
-    DEFAULT_RUN_DIR, append_jsonl, environment_metadata, read_jsonl, sha256_file, write_json,
+    DEFAULT_RUN_DIR, append_jsonl, environment_metadata, limit_gpu_memory, read_jsonl, sha256_file, write_json,
 )
 from Backbones.Task_Finetuned.hf_causal_lm import HFCausalLMBackbone
 from Dataloaders.evaluation.math_reasoning import build_messages, load_math_reasoning
@@ -57,9 +57,9 @@ def main(argv=None):
     # `expandable_segments` is not supported on Windows.
     ap.add_argument("--chunk-tokens", type=int, default=1024)
     ap.add_argument("--max-batch", type=int, default=32)
-    ap.add_argument("--kv-token-budget", type=int, default=56_000)
-    ap.add_argument("--gpu-memory-fraction", type=float, default=0.0,
-                    help="optional hard cap for PyTorch's caching allocator (fraction of GPU memory); 0 = no cap")
+    ap.add_argument("--kv-token-budget", type=int, default=48_000)
+    ap.add_argument("--gpu-memory-fraction", type=float, default=0.85,
+                    help="cap for PyTorch's caching allocator (fraction of GPU memory); 0 = no cap")
     ap.add_argument("--run-dir", type=Path, default=DEFAULT_RUN_DIR)
     ap.add_argument("--device", default="cuda")
     args = ap.parse_args(argv)
@@ -75,8 +75,8 @@ def main(argv=None):
         return
 
     bb = HFCausalLMBackbone.from_registry(args.backbone_id, device=args.device)
-    if args.device.startswith("cuda") and args.gpu_memory_fraction > 0:
-        torch.cuda.set_per_process_memory_fraction(args.gpu_memory_fraction)
+    if args.device.startswith("cuda"):
+        limit_gpu_memory(args.gpu_memory_fraction)
     tok = bb.tokenizer
     gen_cfg = bb.model.generation_config
     top_k = args.top_k if args.top_k is not None else gen_cfg.top_k

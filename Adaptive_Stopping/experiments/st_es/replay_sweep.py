@@ -36,7 +36,7 @@ from Adaptive_Stopping.common.forced_answer import EXIT_PROMPTS, answer_text, fo
 from Adaptive_Stopping.common.replay import st_es_cut_points, step_count_cut_points
 from Adaptive_Stopping.common.steps import segment_token_ids
 from Adaptive_Stopping.experiments.st_es.io_utils import (
-    DEFAULT_RUN_DIR, append_jsonl, environment_metadata, read_jsonl, sha256_file, write_json,
+    DEFAULT_RUN_DIR, append_jsonl, environment_metadata, limit_gpu_memory, read_jsonl, sha256_file, write_json,
 )
 from Adaptive_Stopping.methods.step_tagging.calibration import (
     PAPER_TARGETS, Config, build_grid, select_configs,
@@ -128,6 +128,8 @@ def main(argv=None):
     t_forced = time.time()
     if n_todo:
         bb.load(device=args.device)
+        if args.device.startswith("cuda"):
+            limit_gpu_memory(0.85)
         eos = bb.eos_token_ids
         for i, p in enumerate(prepared):
             uid = p["rec"]["uid"]

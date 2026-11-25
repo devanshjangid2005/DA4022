@@ -34,7 +34,9 @@ from Adaptive_Stopping.common.forced_answer import answer_text
 from Adaptive_Stopping.common.live_generation import generate_with_policy
 from Adaptive_Stopping.common.replay import replay_policy
 from Adaptive_Stopping.common.steps import segment_token_ids
-from Adaptive_Stopping.experiments.st_es.io_utils import DEFAULT_RUN_DIR, append_jsonl, environment_metadata, write_json
+from Adaptive_Stopping.experiments.st_es.io_utils import (
+    DEFAULT_RUN_DIR, append_jsonl, environment_metadata, limit_gpu_memory, write_json,
+)
 from Adaptive_Stopping.methods.step_tagging.policy import StepTagEarlyStopping
 from Backbones.Task_Finetuned.hf_causal_lm import HFCausalLMBackbone
 from Dataloaders.evaluation.math_reasoning import build_messages, load_math_reasoning
@@ -96,6 +98,7 @@ def main(argv=None):
     if args.only_uids:
         examples = [ex for ex in examples if ex.uid in set(args.only_uids)]
     bb = HFCausalLMBackbone.from_registry(args.backbone_id, device="cuda")
+    limit_gpu_memory(0.85)
     tok, model = bb.tokenizer, bb.model
     gc = model.generation_config
     sampling = {"do_sample": True, "temperature": 0.6, "top_p": 0.95, "top_k": gc.top_k}
