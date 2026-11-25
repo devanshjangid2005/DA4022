@@ -76,17 +76,29 @@ Paper-reported test results (Table 6, mean of 5 seeds; "Avg@5" = mean accuracy):
   - Tagger `keyword_reasontype.v1`; exit prompt `exit_boxed.v1` = `</think>\n\n**Final Answer**\n\boxed{` followed by ≤100 greedy tokens.
   - Grid: 13 step types × δ ∈ [0, 20], plus step counts {1…10, 12, …, 500}. Targets 85/90/95%.
   - Every run writes a manifest with model revision, counted parameters, GPU, library versions and the trace sha256.
-- **Reproduction command:**
+- **Reproduction command** (same for `math500.yaml`):
   ```bash
   python -m Adaptive_Stopping.experiments.st_es.run_all --config Adaptive_Stopping/configs/st_es/gsm8k.yaml
   python -m Adaptive_Stopping.experiments.st_es.validate_tagger
   python -m Adaptive_Stopping.experiments.st_es.make_report --config Adaptive_Stopping/configs/st_es/gsm8k.yaml
   ```
+  Additional analyses, each documented in [`docs/`](docs/):
+
+  | Analysis | Doc page | Command |
+  |---|---|---|
+  | Prompt-guided baselines | [A](docs/A_prompt_guided_baselines.md) | `run_prompt_guided --config …` |
+  | Minimal step size k | [B](docs/B_min_step_size.md) | `ablation_min_step --config …` |
+  | Tagger analysis | [C](docs/C_tagger_analysis.md) | `tagger_analysis --configs …` |
+  | Reproduction checks and review | [D](docs/D_reproduction_and_review.md) | — |
 - **Tests:**
-  - Command: `python -m pytest Adaptive_Stopping/tests Dataloaders/tests -q`
-  - Count: 120+ tests, all on CPU, nothing downloaded.
-  - They cover segmentation versus `str.split` under arbitrary chunking, tagger cases, δ/budget edge cases, and fast-sweep versus policy replay equivalence.
-  - A tiny random Qwen2 test checks that batched continuation generation equals plain greedy decoding, that shared-prefix forced answers equal fresh prefill, and that the live stop equals the replay stop.
+  - Command: `python -m pytest Adaptive_Stopping/tests Dataloaders/tests Performance_Metrics/tests -q`
+  - Count: 176 tests, all on CPU, nothing downloaded.
+  - They cover segmentation versus `str.split` under arbitrary chunking, tagger cases, δ/budget edge cases, fast-sweep versus policy replay equivalence, step merging, prompt templates, the loaders and the scorer.
+  - A tiny random Qwen2 test checks four equivalences:
+    - batched continuation generation (static KV cache, chunked prefill) equals plain greedy decoding;
+    - shared-prefix forced answers equal fresh prefill;
+    - the live forced answer with KV-cache reuse equals fresh prefill;
+    - the live stop equals the replay stop.
 
 ## Results
 
@@ -136,16 +148,63 @@ So, on held-out GSM8K, ST-ES halves the generated tokens with no statistically s
 - **Latency.** Median latency falls by 52% and mean latency by 46%, roughly in proportion to the generated tokens; the decode speed is unchanged.
 - **Tagger cost.** The tagger costs 0.2 ms per step (0.1 s over all 30 requests).
 - **Peak memory.** Peak memory is the same, because the maximum comes from a request where no verification step occurred and generation ran to the 4096-token cap.
-- **Accuracy (30 problems, small sample).** Live accuracy dropped 20 points; on the same 30 problems, the replay traces show no drop (0.867 for both).
-  - The live and replay runs sample different traces (batch 1 versus batched generation).
-  - All six live disagreements are early stops (173–511 tokens) with a wrong forced answer.
-  - A CPU test confirms that the live answer-forcing path (KV-cache reuse) gives the same tokens as the replay path (fresh prefill).
-  - We read the gap as variance in where the first "verification" step appears, amplified by the approximate tagger. The 200-problem replay is the accuracy estimate we rely on.
+- **Accuracy (30 problems): diagnosed.** Live accuracy dropped 20 points (6 of 30 problems), while on the same 30 problems the replay traces show no drop. We re-ran those 6 problems with token logging (`live_benchmark --only-uids`). The live code path is correct:
+  - each run is deterministic;
+  - the ST-ES run follows the standard run token for token up to its stop;
+  - every stop matched an offline replay of the same tokens.
+
+  The losses are a property of the method on this model. The 1.5B model checks **intermediate** results ("let me check: 20% tip … is $3. Yeah, that checks out"; "let me confirm: … 18 by the administrators, that's 36"). With δ=0 the first such check stops generation, and the forced answer is that intermediate quantity: 3 instead of 18, 18 instead of 36, 24 instead of 48.
+  - **In the 200-problem replay** the same mechanism loses 9 answers, but early stopping also *recovers* 6 problems where standard generation ran into the 4096-token cap without answering. The net change is −1.5 points.
+  - **In the first 30 live problems** only one standard trace hit the cap, so there was almost nothing to recover.
+  - **On MATH-500** the replay shows 16 losses and 4 recoveries.
+
+  The replay over 200 problems remains the accuracy estimate. The live run shows the failure mode: δ=0 with a verification trigger is fragile on multi-step word problems.
 - **Measurement caveat.** Two of the 30 live requests (problems 2–3) overlapped with CPU-heavy replay jobs on the same machine, so their latency may be slightly inflated.
 
 ### MATH-500
 
-_Traces are generated (150 MATH train / 150 MATH-500 problems, cap 8192). Replay, live benchmark and results are pending._
+**Calibration.** On 150 `text.math.train` problems, standard generation scores 0.847 with 3461 mean tokens; 24 of the 150 traces hit the 8192 cap. Calibration then selects:
+
+| Target | ST-ES config | Step-count config |
+|---|---|---|
+| 85% | self-talk, δ=3 | k=40 |
+| 90% | self-talk, δ=4 | k=60 |
+| 95% | self-talk, δ=6 | k=70 |
+
+On this split the self-talk curve lies above the step-count curve (`results/text.math500.test/calibration_curves.png`), as in the paper's Fig. 3.
+
+**Held-out test, replay** (150 `text.math500.test` problems; 26 of the standard traces hit the cap):
+
+| Config | Accuracy | Δ vs standard [95% CI] | Mean generated tokens | Tokens saved | Stop rate |
+|---|---:|---|---:|---:|---:|
+| Standard | 0.807 | – | 3710 | – | 0 |
+| ST-ES 85%: self-talk, δ=3 | 0.720 | −8.7 [−14.7, −3.3] | 1311 | **64.7%** | 0.76 |
+| ST-ES 90%: self-talk, δ=4 | 0.727 | −8.0 [−14.0, −2.7] | 1491 | **59.8%** | 0.65 |
+| ST-ES 95%: self-talk, δ=6 | 0.767 | −4.0 [−9.3, +0.7] | 1757 | **52.6%** | 0.55 |
+| Step-count 85%: k=40 | 0.733 | −7.3 [−13.3, −1.3] | 1710 | 53.9% | 0.58 |
+| Step-count 90%: k=60 | 0.780 | −2.7 [−7.3, +2.0] | 2118 | 42.9% | 0.49 |
+| Step-count 95%: k=70 | 0.787 | −2.0 [−6.7, +2.0] | 2310 | 37.7% | 0.41 |
+
+- **Cost against standard.** On MATH-500, early stopping costs accuracy: ST-ES loses 4–9 points while saving 53–65% of tokens.
+  - The losses are of the same size as the paper's: DS-R1-Distill-Llama-8B on MATH500 lost 11.7 / 8.5 / 3.3 points with 51 / 42 / 28% saved.
+  - Our token savings are larger.
+- **Against the step-count baseline at the same target.** ST-ES scores −1.3 [−6.7, +4.7], −5.3 [−10.7, −0.7] and −2.0 [−6.7, +2.0] points, but uses 23–30% fewer tokens.
+- **At matched token budgets:**
+  - ST-ES 95% (1757 tokens) vs step-count k=40 (1710 tokens): **+3.3 points [−1.3, +8.7]**.
+  - On GSM8K, ST-ES verification δ=0 (779 tokens) vs k=16 (815 tokens): +2.0 [−2.0, +6.5].
+  - So, with our model and tagger, ST-ES is at least as good as the paper's baseline. Its advantage is significant only at the most aggressive GSM8K target (above).
+
+**Live, measured** (first 10 problems of the test subset; batch 1; same setup as GSM8K):
+
+| Policy | Accuracy | Mean tokens | Latency median | Latency mean | Latency p95 | Tokens/s | Peak allocated |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 0.70 | 3822 | 71.3 s | 160.5 s | 375.4 s | 23.8 | 3799 MB |
+| ST-ES 90% (self-talk, δ=4) | 0.80 | 1417 | **50.6 s** | **51.5 s** | **79.3 s** | 27.5 | **3548 MB** |
+
+- **Tail latency.** It drops most: mean latency falls by 68% and p95 by 79%. Standard generation sometimes runs to the 8192-token cap (374 s for one problem), and early stopping cuts those runaway traces. This also lowers peak memory (−251 MB), because the KV cache stops growing.
+- **Decode speed.** Standard decodes more slowly (23.8 versus 27.5 tok/s) because attention over 8k-token contexts costs more.
+- **Stops and tagger cost.** ST-ES stopped on 5 of 10 problems, and all 10 live stop decisions matched an offline replay of the same tokens. The tagger costs 0.16 ms per step.
+- **Sample size.** Live accuracy on 10 problems carries little weight; the 150-problem replay is the accuracy estimate.
 
 ### Tagger agreement with the paper's annotator
 
@@ -168,28 +227,37 @@ On 99 DS-14B MATH500 steps labelled by GPT-4o-mini (released by the authors), th
 | Paper-reported | see table above (Avg@5) | not reported | not reported | not reported | not reported | 8B/14B/32B models, 5 seeds; runtime only estimated (App. F) |
 | Local baseline (GSM8K) | 0.830 replay / 0.900 live | 45.2 s median | 27.6 tok/s | 3599 MB | not measured | replay n=200, live n=30 |
 | Local method (GSM8K) | 0.815 replay / 0.700 live | 21.5 s median | 27.4 tok/s | 3599 MB | not measured | verification δ=0; `approximate` (rule-based tagger) |
+| Local baseline (MATH-500) | 0.807 replay / 0.70 live | 71.3 s median (160.5 s mean) | 23.8 tok/s | 3799 MB | not measured | replay n=150, live n=10 |
+| Local method (MATH-500) | 0.727 replay / 0.80 live | 50.6 s median (51.5 s mean) | 27.5 tok/s | 3548 MB | not measured | self-talk δ=4; `approximate` |
 
 ## Differences and limitations
 
 - **Backbone.** We use DeepSeek-R1-Distill-Qwen-1.5B, not the 8B/14B/32B models. A 1.5B model reasons differently (more repetition, more formula steps), so the absolute numbers are not comparable with the paper's.
-- **Step tagger (main deviation, `approximate`).** We use a rule-based keyword tagger instead of GPT-4o-mini labels and binary BERT taggers, because there was no API budget or labelled data. On 99 GPT-4o-mini-labelled steps released by the authors (DS-14B, MATH500, not used to write the rules), it agrees on 40.4% of 14-way labels. One-vs-rest macro-F1 is 0.48–0.88 depending on step type (verification 0.63, self-talk 0.69, exploration 0.88) (the paper's BERT taggers score about 0.8–0.9 on their own data). The step types it finds are therefore only an approximation of the paper's.
+- **Step tagger (main deviation, `approximate`).** We use a rule-based keyword tagger instead of GPT-4o-mini labels and binary BERT taggers, because there was no API budget or labelled data.
+  - On 99 GPT-4o-mini-labelled steps released by the authors (DS-14B, MATH500, not used to write the rules), it agrees on 40.4% of 14-way labels.
+  - One-vs-rest macro-F1 is 0.48–0.88 depending on step type: verification 0.63 (recall 3/9), self-talk 0.69 (over-predicted), exploration 0.88. The paper's BERT taggers score about 0.8–0.9 on their own data.
+  - The main failure: a leading "Wait," makes v1 say self-talk, whatever the step does.
+  - A second rule set derived from our own traces did not improve agreement ([C](docs/C_tagger_analysis.md)).
+  - The step types it finds are therefore only an approximation of the paper's.
 - **Seeds and subsets.** One seed (42) instead of five, so we report pass@1, not Avg@5. Subsets have 150–200 problems; GPQA, MMLU-Pro and AIME were not run.
 - **Token cap.** 4096 (GSM8K) and 8192 (MATH) generated tokens instead of 32768. The same cap applies to the baseline and to ST-ES. Traces that hit the cap count as wrong unless an early stop rescues them.
 - **Prompt.** The paper's standard prompt is the raw question (as in the authors' code). We append the DeepSeek model card's "reason step by step … \boxed{}" directive, which helps a 1.5B model produce a parseable answer.
 - **Exit prompt.** The paper does not give its exit prompt. Ours closes the thinking block and opens `\boxed{`. The answer is decoded greedily and stops when the box closes (≤100 tokens).
 - **Monitoring scope.** Steps after `</think>` (the final-answer section) are never used to stop. The paper does not discuss this case.
-- **Minimal step size.** Steps are split at every `"\n\n"`, as in Eq. 1, arXiv v2 and the authors' code (k = 0). The proceedings version's minimal step size k (Algorithm 1) has no value in the paper, so it is not applied in the main results.
+- **Minimal step size.** The main results split at every `"\n\n"`, as in Eq. 1, arXiv v2 and the authors' code (k = 0). The proceedings version's minimal step size k (Algorithm 1) has no value in the paper. It is implemented and ablated separately in [B](docs/B_min_step_size.md).
 - **Baselines.**
   - The paper's "token-count baseline" stops after k steps of any type (`StepCountStopping`). It is calibrated with the same 85/90/95% rule.
-  - The prompt-guided baselines P(0)user, P(0)system, P(1)system, P(3)system were **not run** for lack of time.
+  - The four prompt-guided baselines were run on GSM8K test only, not on MATH-500 ([A](docs/A_prompt_guided_baselines.md)).
 - **Offline replay versus live run.** Like the paper, accuracy and token counts come from offline replay over cached generations. Latency and peak memory come from one live run of the final configuration on a small subset (batch size 1). Replay-derived runtimes, where shown, are labelled *estimated*.
-- **Cached-generation batching.** Traces are sampled in continuation rounds: per-row prefill, rounds of 1024 tokens, re-queued until EOS or the cap. This changes the random stream, not the sampling distribution. The GSM8K calibration traces were produced in two sessions because the first was interrupted; the manifest records how many records were reused.
+- **Cached-generation batching.** Traces are sampled in continuation rounds: per-row prefill into a static KV cache, rounds of 1024 tokens, re-queued until EOS or the cap. This changes the random stream, not the sampling distribution.
+  - Runs that were interrupted (GPU-memory fixes, a session break) resumed from the finished traces. The GSM8K-train and MATH-train trace files were completed in more than one session (188 of 200 and 111 of 150 records come from an earlier session); each manifest records this.
+  - Finished traces are never regenerated, so each trace is a complete sample from one session.
 - **Correctness checking.** Math-Verify runs without timeouts on Windows, where its subprocess-based timeout fails.
 - **Not measured.** Energy (`not_measured`).
 
 ## Reproduction checklist
 
-- [x] Exact paper link and version verified. The official AdaptFM accepted-papers page (fetched 2026-11-25) links `openreview.net/forum?id=bNn5OusO22` to this exact title and author list, and arXiv v2 matches it. The OpenReview page itself timed out from our network, so a camera-ready PDF or code link posted only there is unchecked.
+- [x] Exact paper link and version verified. The official AdaptFM accepted-papers page (fetched 2026-11-25) links `openreview.net/forum?id=bNn5OusO22` to this exact title and author list, and arXiv v2 and the proceedings PDF match it. The OpenReview page itself could not be fetched automatically (timeout, then a bot challenge), so a camera-ready PDF or code link posted only there is unchecked (see [D](docs/D_reproduction_and_review.md)).
 - [x] Base model and dataset revisions pinned (registry entries)
 - [x] Baseline runs on the same setup (standard and step-count, same traces, prompts and cap)
 - [x] Tests and seed handling added
