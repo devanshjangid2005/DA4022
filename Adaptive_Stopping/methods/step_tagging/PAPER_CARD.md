@@ -92,8 +92,8 @@ Paper-reported test results (Table 6, mean of 5 seeds; "Avg@5" = mean accuracy):
   | Reproduction checks and review | [D](docs/D_reproduction_and_review.md) | — |
 - **Tests:**
   - Command: `python -m pytest Adaptive_Stopping/tests Dataloaders/tests Performance_Metrics/tests -q`
-  - Count: 176 tests, all on CPU, nothing downloaded.
-  - They cover segmentation versus `str.split` under arbitrary chunking, tagger cases, δ/budget edge cases, fast-sweep versus policy replay equivalence, step merging, prompt templates, the loaders and the scorer.
+  - Count: 180 tests, all on CPU, nothing downloaded.
+  - They cover segmentation versus `str.split` under arbitrary chunking, tagger cases, δ/budget edge cases, fast-sweep versus policy replay equivalence, step merging, prompt templates, the loaders, the scorer, and `run_all` wiring and config validation.
   - A tiny random Qwen2 test checks four equivalences:
     - batched continuation generation (static KV cache, chunked prefill) equals plain greedy decoding;
     - shared-prefix forced answers equal fresh prefill;
