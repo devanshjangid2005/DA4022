@@ -50,7 +50,7 @@
       ]
     }
   },
-  "commit_at_report": "291640f83c1b8a37973bd8fc55c1827d2f659599+dirty",
+  "commit_at_report": "887e0da71ddc37501fbe7eded07456a735ecbc07",
   "traces": {
     "calibration": {
       "file": "math_cot_boxed.v1_n200_o0_s42_cap4096.jsonl",
