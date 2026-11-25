@@ -62,6 +62,45 @@ def environment_metadata() -> dict:
     return meta
 
 
+METRICS_SCHEMA = ["experiment_id", "paper_id", "method", "commit", "backbone_id", "backbone_revision", "dataset_id",
+                  "split", "seed", "device", "framework_version", "dtype", "batch_size", "input_length", "output_length",
+                  "quality_metric", "quality_value", "latency_median_ms", "latency_p95_ms", "throughput",
+                  "peak_memory_mb", "energy_j", "status", "notes"]
+
+
+def upsert_metric_rows(path: str | Path, rows: list[dict], id_prefix: str) -> None:
+    """Replace the rows whose ``experiment_id`` starts with ``id_prefix`` and keep every other row.
+
+    Several scripts write to the same results CSV (``Performance_Metrics`` schema); each owns one prefix.
+    """
+    import csv
+
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    keep = []
+    if path.exists():
+        with open(path, encoding="utf-8") as fh:
+            keep = [r for r in csv.DictReader(fh) if not r["experiment_id"].startswith(id_prefix)]
+    with open(path, "w", newline="", encoding="utf-8") as fh:
+        w = csv.DictWriter(fh, fieldnames=METRICS_SCHEMA)
+        w.writeheader()
+        w.writerows(keep + rows)
+
+
+def git_commit(repo: str | Path) -> str:
+    """HEAD commit of ``repo``, with ``+dirty`` when tracked files are modified."""
+    import subprocess
+
+    try:
+        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True,
+                             check=True).stdout.strip()
+        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=repo,
+                               capture_output=True, text=True).stdout.strip()
+        return sha + ("+dirty" if dirty else "")
+    except Exception:
+        return "unknown"
+
+
 def limit_gpu_memory(fraction: float = 0.85) -> None:
     """Cap PyTorch's CUDA caching allocator at ``fraction`` of device memory.
 

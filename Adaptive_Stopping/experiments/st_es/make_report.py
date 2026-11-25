@@ -21,21 +21,18 @@ import argparse
 import csv
 import json
 import shutil
-import subprocess
 from pathlib import Path
 
 import yaml
 
 from Adaptive_Stopping.experiments.st_es.generate import cache_path
-from Adaptive_Stopping.experiments.st_es.io_utils import DEFAULT_RUN_DIR, read_jsonl, write_json
+from Adaptive_Stopping.experiments.st_es.io_utils import (
+    DEFAULT_RUN_DIR, git_commit as _git_commit, read_jsonl, upsert_metric_rows, write_json,
+)
 from Backbones.registry import get_backbone_entry
 
 REPO = Path(__file__).resolve().parents[3]
 METRICS_CSV = REPO / "Performance_Metrics" / "results" / "st_es.csv"
-SCHEMA = ["experiment_id", "paper_id", "method", "commit", "backbone_id", "backbone_revision", "dataset_id", "split",
-          "seed", "device", "framework_version", "dtype", "batch_size", "input_length", "output_length",
-          "quality_metric", "quality_value", "latency_median_ms", "latency_p95_ms", "throughput", "peak_memory_mb",
-          "energy_j", "status", "notes"]
 
 # Chart tokens (reference palette of the dataviz method; first three categorical slots, validated all-pairs).
 SURFACE, INK, INK2, MUTED, GRID, AXIS = "#fcfcfb", "#0b0b0b", "#52514e", "#898781", "#e1e0d9", "#c3c2b7"
@@ -43,13 +40,7 @@ SERIES = ["#2a78d6", "#eb6834", "#1baf7a"]
 
 
 def git_commit() -> str:
-    try:
-        sha = subprocess.run(["git", "rev-parse", "HEAD"], cwd=REPO, capture_output=True, text=True, check=True).stdout.strip()
-        dirty = subprocess.run(["git", "status", "--porcelain", "--untracked-files=no"], cwd=REPO,
-                               capture_output=True, text=True).stdout.strip()
-        return sha + ("+dirty" if dirty else "")
-    except Exception:
-        return "unknown"
+    return _git_commit(REPO)
 
 
 def read_csv(path: Path) -> list[dict]:
@@ -301,15 +292,8 @@ def main(argv=None):
                          "notes": f"live measured run, n={p['n']}, batch 1, 1 warm-up; latency = prompt IDs on GPU to "
                                   f"final answer incl. tagging and forced answer; peak = torch max_memory_allocated; "
                                   f"stop rate {p['stop_rate']:.2f}"})
-    METRICS_CSV.parent.mkdir(parents=True, exist_ok=True)
-    old = []
-    if METRICS_CSV.exists():
-        with open(METRICS_CSV, encoding="utf-8") as fh:
-            old = [r for r in csv.DictReader(fh) if r["dataset_id"] != ds]
-    with open(METRICS_CSV, "w", newline="", encoding="utf-8") as fh:
-        w = csv.DictWriter(fh, fieldnames=SCHEMA)
-        w.writeheader()
-        w.writerows(old + rows)
+    # replace only this script's rows for this dataset; rows written by other scripts (e.g. prompt-guided) stay
+    upsert_metric_rows(METRICS_CSV, rows, id_prefix=f"st_es-{ds}-")
     print(f"wrote {out} and {len(rows)} rows to {METRICS_CSV}")
 
 
