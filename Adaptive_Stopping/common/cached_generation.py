@@ -69,7 +69,7 @@ def _take_batch(pending: list[GenJob], max_batch: int, kv_budget: int, chunk: in
     return batch
 
 
-def _prefill_rows(model, ctxs: list[list[int]], width: int, device, max_new: int):
+def _prefill_rows(model, ctxs: list[list[int]], width: int, device, max_new: int, prefill_chunk: int = 2048):
     """KV cache for a left-padded batch, built by prefilling each row on its own.
 
     Row r occupies cache slots ``[width - len(ctx_r), width - 1)`` and holds the
@@ -96,14 +96,19 @@ def _prefill_rows(model, ctxs: list[list[int]], width: int, device, max_new: int
         z = torch.zeros((len(ctxs), n_kv, width - 1, head_dim), dtype=model.dtype, device=device)
         cache.update(z, z, li)
         del z
+    from transformers import DynamicCache
+
     decoder = model.get_decoder()
     for r, c in enumerate(ctxs):
-        out = decoder(input_ids=torch.tensor([c[:-1]], device=device), use_cache=True)
-        n = len(c) - 1
-        for li, layer in enumerate(out.past_key_values.layers):
+        ids = torch.tensor([c[:-1]], device=device)
+        n = ids.shape[1]
+        row_cache = DynamicCache()
+        for s in range(0, n, prefill_chunk):  # chunked prefill bounds activation memory for long rows
+            decoder(input_ids=ids[:, s:s + prefill_chunk], past_key_values=row_cache, use_cache=True)
+        for li, layer in enumerate(row_cache.layers):
             cache.layers[li].keys[r, :, width - 1 - n:width - 1] = layer.keys[0]
             cache.layers[li].values[r, :, width - 1 - n:width - 1] = layer.values[0]
-        del out
+        del row_cache, ids
     if torch.cuda.is_available():
         torch.cuda.empty_cache()  # drop the per-row prefill temporaries before decoding (fragmentation)
     return cache

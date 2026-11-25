@@ -98,6 +98,23 @@ def test_batched_rounds_match_plain_greedy_generation(tiny):
         assert j.gen_ids == ref
 
 
+def test_chunked_row_prefill_matches_one_shot(tiny):
+    """Chunked per-row prefill (used for long contexts) gives the same continuation as one-shot prefill."""
+    from Adaptive_Stopping.common import cached_generation as cg
+
+    tok, model, _ = tiny
+    ctx = tok("a long prompt that spans several prefill chunks 0123456789", add_special_tokens=False)["input_ids"]
+    width = len(ctx)
+    outs = []
+    for chunk in (4, 2048):
+        cache = cg._prefill_rows(model, [ctx], width, torch.device("cpu"), max_new=6, prefill_chunk=chunk)
+        ids = torch.tensor([ctx])
+        g = model.generate(input_ids=ids, attention_mask=torch.ones_like(ids), cache=cache, max_new_tokens=6,
+                           do_sample=False, eos_token_id=[EOS], pad_token_id=PAD, disable_compile=True)
+        outs.append(g[0, width:].tolist())
+    assert outs[0] == outs[1]
+
+
 def test_shared_prefix_forced_answers_match_fresh_prefill(tiny):
     tok, model, _ = tiny
     full = tok("question: 3*4?\n\nstep one\n\nstep two\n\nstep three", add_special_tokens=False)["input_ids"]
