@@ -32,11 +32,12 @@ import time
 from collections import defaultdict
 from pathlib import Path
 
-from Adaptive_Stopping.common.forced_answer import EXIT_PROMPTS, answer_text, force_answers_shared_prefix
-from Adaptive_Stopping.common.replay import st_es_cut_points, step_count_cut_points
-from Adaptive_Stopping.common.steps import segment_token_ids
+from Adaptive_Stopping.common.forced_answer import EXIT_PROMPTS
 from Adaptive_Stopping.experiments.st_es.io_utils import (
-    DEFAULT_RUN_DIR, append_jsonl, environment_metadata, limit_gpu_memory, read_jsonl, sha256_file, write_json,
+    DEFAULT_RUN_DIR, environment_metadata, limit_gpu_memory, read_jsonl, sha256_file, write_json,
+)
+from Adaptive_Stopping.experiments.st_es.replay_lib import (  # noqa: F401  (prepare/cut_points re-exported)
+    ForcedAnswerCache, aggregate, cut_points, prepare,
 )
 from Adaptive_Stopping.methods.step_tagging.calibration import (
     PAPER_TARGETS, Config, build_grid, select_configs,
@@ -44,38 +45,7 @@ from Adaptive_Stopping.methods.step_tagging.calibration import (
 from Adaptive_Stopping.methods.step_tagging.tagger import KeywordStepTagger
 from Backbones.Task_Finetuned.hf_causal_lm import HFCausalLMBackbone
 from Backbones.registry import get_backbone_entry
-from Performance_Metrics.quality.math_answer import SCORER_ID, is_correct
-
-
-def prepare(records, tokenizer, tagger):
-    prepared = []
-    for r in records:
-        steps = segment_token_ids(r["gen_ids"], tokenizer)
-        tags = tagger.tag_all(s.text for s in steps)
-        prepared.append({
-            "rec": r, "steps": steps, "tags": tags,
-            "base_correct": is_correct(r["gen_text"], r["gold"], r["gold_format"]),
-            "n_eligible": sum(1 for s in steps if s.closed and s.in_thinking),
-        })
-    return prepared
-
-
-def cut_points(prep, configs):
-    """{config key: cut (generated tokens kept) or None} for one prepared trace."""
-    by_tag = defaultdict(list)
-    ks = []
-    for c in configs:
-        if c.kind == "st_es":
-            by_tag[c.tag].append(c.delta)
-        else:
-            ks.append(c.k)
-    out = {}
-    for tag, deltas in by_tag.items():
-        for d, cut in st_es_cut_points(prep["steps"], prep["tags"], tag, deltas).items():
-            out[Config("st_es", tag=tag, delta=d).key] = cut
-    for k, cut in step_count_cut_points(prep["steps"], ks).items():
-        out[Config("step_count", k=k).key] = cut
-    return out
+from Performance_Metrics.quality.math_answer import SCORER_ID
 
 
 def main(argv=None):
@@ -111,76 +81,21 @@ def main(argv=None):
         configs = build_grid()
     cuts = {p["rec"]["uid"]: cut_points(p, configs) for p in prepared}
 
-    # ---------------- forced answers (cached) ----------------
-    cache_path = out_dir.parent / f"forced_answers.{args.exit_prompt_id}.jsonl"
-    forced = {}
-    if cache_path.exists():
-        for row in read_jsonl(cache_path):
-            forced[(row["uid"], row["cut"])] = row
-    todo = defaultdict(set)
-    for p in prepared:
-        uid = p["rec"]["uid"]
-        for cut in cuts[uid].values():
-            if cut is not None and (uid, cut) not in forced:
-                todo[uid].add(cut)
+    # ---------------- forced answers (cached per trace file) ----------------
+    forced = ForcedAnswerCache(out_dir.parent / f"forced_answers.{args.exit_prompt_id}.jsonl")
+    todo = forced.missing(prepared, cuts)
     n_todo = sum(len(v) for v in todo.values())
     print(f"forced answers: {len(forced)} cached, {n_todo} to compute over {len(todo)} traces")
-    t_forced = time.time()
+    forced_wall = 0.0
     if n_todo:
         bb.load(device=args.device)
         if args.device.startswith("cuda"):
             limit_gpu_memory(0.85)
-        eos = bb.eos_token_ids
-        for i, p in enumerate(prepared):
-            uid = p["rec"]["uid"]
-            if uid not in todo:
-                continue
-            r = p["rec"]
-            full = r["prompt_ids"] + r["gen_ids"]
-            plen = len(r["prompt_ids"])
-            res = force_answers_shared_prefix(bb.model, tok, full, [plen + c for c in sorted(todo[uid])],
-                                              exit_prompt_id=args.exit_prompt_id, eos_ids=eos,
-                                              pad_id=tok.pad_token_id)
-            for ctx_len, ans in res.items():
-                cut = ctx_len - plen
-                text = answer_text(tok, ans, args.exit_prompt_id)
-                row = {"uid": uid, "cut": cut, "exit_prompt_id": args.exit_prompt_id, "answer_ids": ans,
-                       "answer_text": text, "correct": is_correct(text, r["gold"], r["gold_format"])}
-                forced[(uid, cut)] = row
-                append_jsonl(cache_path, row)
-            if (i + 1) % 10 == 0:
-                print(f"  {i + 1}/{len(prepared)} traces, {time.time() - t_forced:.0f}s")
-    forced_wall = time.time() - t_forced
+        forced_wall = forced.fill(prepared, todo, bb, args.exit_prompt_id)
 
     # ---------------- aggregate ----------------
-    n = len(prepared)
-    std_tokens = sum(p["rec"]["n_gen_tokens"] for p in prepared) / n
-    std_acc = sum(p["base_correct"] for p in prepared) / n
-    rows = [{"kind": "standard", "key": "standard", "tag": None, "delta": None, "k": None, "n": n,
-             "accuracy": std_acc, "mean_tokens": std_tokens, "saved_pct": 0.0, "stop_rate": 0.0,
-             "mean_answer_tokens": 0.0}]
-    per_example = [{"key": "standard", "uid": p["rec"]["uid"], "stopped": False, "cut": None,
-                    "tokens": p["rec"]["n_gen_tokens"], "correct": int(p["base_correct"])} for p in prepared]
-    for c in configs:
-        acc = tok_sum = ans_sum = stops = 0
-        for p in prepared:
-            r = p["rec"]
-            cut = cuts[r["uid"]][c.key]
-            if cut is None:
-                correct, used, ans_len = p["base_correct"], r["n_gen_tokens"], 0
-            else:
-                f = forced[(r["uid"], cut)]
-                correct, ans_len = f["correct"], len(f["answer_ids"])
-                used = cut + ans_len
-                stops += 1
-            acc += correct
-            tok_sum += used
-            ans_sum += ans_len
-            per_example.append({"key": c.key, "uid": r["uid"], "stopped": cut is not None, "cut": cut,
-                                "tokens": used, "correct": int(correct)})
-        rows.append({"kind": c.kind, "key": c.key, "tag": c.tag, "delta": c.delta, "k": c.k, "n": n,
-                     "accuracy": acc / n, "mean_tokens": tok_sum / n, "saved_pct": 100 * (1 - tok_sum / n / std_tokens),
-                     "stop_rate": stops / n, "mean_answer_tokens": ans_sum / max(stops, 1)})
+    rows, per_example = aggregate(prepared, configs, cuts, forced)
+    n, std_acc, std_tokens = rows[0]["n"], rows[0]["accuracy"], rows[0]["mean_tokens"]
 
     fields = list(rows[0].keys())
     with open(out_dir / "sweep.csv", "w", newline="", encoding="utf-8") as fh:
