@@ -215,7 +215,10 @@ def main(argv=None):
             st_vs_sc[str(t)] = {"st_es": a, "step_count": b, **paired_bootstrap(pe, a, b)}
 
     ds = cfg["evaluation"]["dataset_id"]
-    out = REPO / "Adaptive_Stopping" / "experiments" / "st_es" / "results" / ds
+    # Main configs report under the evaluation dataset id; other runs (e.g. the smoke config) set report_name
+    # so they can never overwrite the main results, and write_metrics: false to keep them out of the metrics CSV.
+    tag = cfg.get("report_name", ds)
+    out = REPO / "Adaptive_Stopping" / "experiments" / "st_es" / "results" / tag
     out.mkdir(parents=True, exist_ok=True)
     shutil.copyfile(rep["calibration"] / "grid" / "sweep.csv", out / "calibration_sweep.csv")
     fields = ["kind", "key", "target", "tag", "delta", "k", "n", "accuracy", "mean_tokens", "saved_pct", "stop_rate",
@@ -270,7 +273,7 @@ def main(argv=None):
             name, status, method = f"st_es@{r['target']:.2f}", "approximate", f"ST-ES {r['tag']} delta={r['delta']}"
         else:
             name, status, method = f"step_count@{r['target']:.2f}", "partial", f"step-count baseline k={r['k']}"
-        rows.append({**common, "experiment_id": f"st_es-{ds}-replay-{name}", "method": method, "batch_size": "",
+        rows.append({**common, "experiment_id": f"st_es-{tag}-replay-{name}", "method": method, "batch_size": "",
                      "output_length": round(r["mean_tokens"], 1), "quality_value": round(r["accuracy"], 4),
                      "latency_median_ms": "", "latency_p95_ms": "", "throughput": "", "peak_memory_mb": "",
                      "status": status,
@@ -280,7 +283,7 @@ def main(argv=None):
     if live:
         for name, p in live["policies"].items():
             is_std = p["config"] is None
-            rows.append({**common, "experiment_id": f"st_es-{ds}-live-{name.split(':')[0]}",
+            rows.append({**common, "experiment_id": f"st_es-{tag}-live-{name.split(':')[0]}",
                          "method": "standard generation (no stopping)" if is_std else f"ST-ES live {name.split(':', 1)[1]}",
                          "batch_size": 1, "output_length": round(p["mean_generated_tokens"], 1),
                          "quality_value": round(p["accuracy"], 4),
@@ -293,7 +296,10 @@ def main(argv=None):
                                   f"final answer incl. tagging and forced answer; peak = torch max_memory_allocated; "
                                   f"stop rate {p['stop_rate']:.2f}"})
     # replace only this script's rows for this dataset; rows written by other scripts (e.g. prompt-guided) stay
-    upsert_metric_rows(METRICS_CSV, rows, id_prefix=f"st_es-{ds}-")
+    if not cfg.get("write_metrics", True):
+        print(f"wrote {out}; metrics rows not written (write_metrics: false)")
+        return
+    upsert_metric_rows(METRICS_CSV, rows, id_prefix=f"st_es-{tag}-")
     print(f"wrote {out} and {len(rows)} rows to {METRICS_CSV}")
 
 
