@@ -70,6 +70,9 @@ def main(argv=None):
     out.parent.mkdir(parents=True, exist_ok=True)
     done = {r["uid"] for r in read_jsonl(out)} if out.exists() else set()
     print(f"{len(examples)} examples, {len(done)} already cached in {out}")
+    if {ex.uid for ex in examples} <= done and out.with_suffix(".manifest.json").exists():
+        print("all traces cached and manifest present; nothing to do")  # keep the original manifest/provenance
+        return
 
     bb = HFCausalLMBackbone.from_registry(args.backbone_id, device=args.device)
     if args.device.startswith("cuda") and args.gpu_memory_fraction > 0:

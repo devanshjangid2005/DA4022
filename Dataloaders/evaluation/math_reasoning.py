@@ -48,7 +48,18 @@ def gsm8k_final_answer(answer_field: str) -> str:
 
 
 def last_boxed_content(text: str) -> str | None:
-    """Content of the last ``\\boxed{...}`` (or ``\\fbox{...}``) with balanced braces."""
+    """Content of the last ``\\boxed{...}`` (or ``\\fbox{...}``) with balanced braces.
+
+    The brace-less form ``\\boxed 2`` (used by 2 of the 7,500 MATH train
+    solutions) is accepted too: the answer is the following run of
+    non-space characters, up to a closing ``$``.
+    """
+    import re
+
+    m = list(re.finditer(r"\\boxed\s+([^\s${}]+)", text))
+    braced = text.rfind("\\boxed{")
+    if m and m[-1].start() > braced:
+        return m[-1].group(1)
     for marker in ("\\boxed{", "\\fbox{"):
         start = text.rfind(marker)
         if start == -1:

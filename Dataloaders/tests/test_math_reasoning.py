@@ -43,6 +43,10 @@ def test_last_boxed_content_nested_and_last():
     assert last_boxed_content("\\fbox{7}") == "7"
     assert last_boxed_content("no box") is None
     assert last_boxed_content("\\boxed{unbalanced") is None
+    # brace-less form found in MATH train rows 888 and 1011
+    assert last_boxed_content("our answer is $\\boxed 2$.") == "2"
+    assert last_boxed_content("$x^2 + y^2 = \\boxed 9$.") == "9"
+    assert last_boxed_content("\\boxed 3 earlier, finally \\boxed{4}") == "4"
 
 
 def test_records_to_examples_per_dataset():

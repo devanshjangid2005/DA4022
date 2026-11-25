@@ -107,7 +107,7 @@ def force_answers(model, tokenizer, contexts: Sequence[Sequence[int]], *, exit_p
 @torch.inference_mode()
 def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_lens: Sequence[int], *,
                                 exit_prompt_id: str = "exit_boxed.v1", eos_ids: Sequence[int], pad_id: int,
-                                max_new_tokens: int = ANSWER_BUDGET, kv_token_budget: int = 110_000,
+                                max_new_tokens: int = ANSWER_BUDGET, kv_token_budget: int = 56_000,
                                 max_batch: int = 32) -> dict[int, list[int]]:
     """Forced answers for many cut points of *one* trace, reusing a single prefill.
 
@@ -117,8 +117,10 @@ def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_l
     needed prefix gives the cache of every shorter one; each row of a batch gets
     its prefix slice, left-padded. Greedy decoding then matches ``force_answers``
     up to floating-point differences (checked in the tests on a tiny model).
+    Each batch decodes into a preallocated ``StaticCache`` (no per-step
+    concatenation, so long prefixes do not fragment GPU memory).
     """
-    from transformers import DynamicCache
+    from transformers import StaticCache
 
     exit_ids = tokenizer(EXIT_PROMPTS[exit_prompt_id], add_special_tokens=False)["input_ids"]
     device = next(model.parameters()).device
@@ -137,7 +139,8 @@ def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_l
         n = max(1, min(max_batch, kv_token_budget // (width + len(exit_ids) + max_new_tokens)))
         chunk = cuts[i:i + n]
         i += n
-        cache = DynamicCache()
+        total = width + len(exit_ids)
+        cache = StaticCache(config=model.config, max_cache_len=total + max_new_tokens)
         for li, (k, v) in enumerate(layers):
             kb = k.new_zeros((len(chunk), k.shape[1], width, k.shape[3]))
             vb = v.new_zeros((len(chunk), v.shape[1], width, v.shape[3]))
@@ -145,7 +148,7 @@ def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_l
                 kb[r, :, width - ln:] = k[0, :, :ln]
                 vb[r, :, width - ln:] = v[0, :, :ln]
             cache.update(kb, vb, li)
-        total = width + len(exit_ids)
+            del kb, vb
         ids = torch.full((len(chunk), total), pad_id, dtype=torch.long)
         att = torch.zeros((len(chunk), total), dtype=torch.long)
         for r, ln in enumerate(chunk):
@@ -155,7 +158,8 @@ def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_l
         crit = BoxCloseCriteria(tokenizer, eos_ids, total, len(chunk))
         gen = model.generate(input_ids=ids.to(device), attention_mask=att.to(device), cache=cache,
                              max_new_tokens=max_new_tokens, do_sample=False, temperature=None, top_p=None, top_k=None,
-                             eos_token_id=list(eos_ids), pad_token_id=pad_id, stopping_criteria=[crit])
+                             eos_token_id=list(eos_ids), pad_token_id=pad_id, stopping_criteria=[crit],
+                             disable_compile=True)
         new = gen[:, total:].tolist()
         for r, ln in enumerate(chunk):
             stop = crit.stop_len[r]
