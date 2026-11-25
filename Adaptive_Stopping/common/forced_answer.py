@@ -107,8 +107,8 @@ def force_answers(model, tokenizer, contexts: Sequence[Sequence[int]], *, exit_p
 @torch.inference_mode()
 def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_lens: Sequence[int], *,
                                 exit_prompt_id: str = "exit_boxed.v1", eos_ids: Sequence[int], pad_id: int,
-                                max_new_tokens: int = ANSWER_BUDGET, kv_token_budget: int = 56_000,
-                                max_batch: int = 32) -> dict[int, list[int]]:
+                                max_new_tokens: int = ANSWER_BUDGET, kv_token_budget: int = 40_000,
+                                max_batch: int = 32, prefill_chunk: int = 1024) -> dict[int, list[int]]:
     """Forced answers for many cut points of *one* trace, reusing a single prefill.
 
     ``full_ids`` is prompt + full generated trace; each ``cut_len`` is a context
@@ -127,11 +127,18 @@ def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_l
     cuts = sorted(set(int(c) for c in cut_lens), reverse=True)
     if not cuts:
         return {}
+    from transformers import DynamicCache
+
     longest = cuts[0]
     base = model.get_decoder() if hasattr(model, "get_decoder") else model.model
-    out = base(input_ids=torch.tensor([list(full_ids[:longest])], device=device), use_cache=True)
-    layers = [(layer.keys, layer.values) for layer in out.past_key_values.layers]
-    del out
+    ids = torch.tensor([list(full_ids[:longest])], device=device)
+    prefix_cache = DynamicCache()
+    for s in range(0, ids.shape[1], prefill_chunk):
+        # chunked prefill: without flash attention (Windows) SDPA may materialise the full attention matrix,
+        # which for an 8k-token trace no longer fits next to the model on an 8 GB GPU
+        base(input_ids=ids[:, s:s + prefill_chunk], past_key_values=prefix_cache, use_cache=True)
+    layers = [(layer.keys, layer.values) for layer in prefix_cache.layers]
+    del prefix_cache, ids
     results: dict[int, list[int]] = {}
     i = 0
     while i < len(cuts):

@@ -120,7 +120,7 @@ def test_shared_prefix_forced_answers_match_fresh_prefill(tiny):
     full = tok("question: 3*4?\n\nstep one\n\nstep two\n\nstep three", add_special_tokens=False)["input_ids"]
     cuts = [10, 18, 27, len(full)]
     shared = force_answers_shared_prefix(model, tok, full, cuts, eos_ids=[EOS], pad_id=PAD, max_new_tokens=8,
-                                         max_batch=3)
+                                         max_batch=3, prefill_chunk=7)  # chunked prefill must not change answers
     fresh = force_answers(model, tok, [full[:c] for c in cuts], eos_ids=[EOS], pad_id=PAD, max_new_tokens=8,
                           max_batch=2)
     assert [shared[c] for c in cuts] == fresh
