@@ -164,7 +164,12 @@ def force_answers_shared_prefix(model, tokenizer, full_ids: Sequence[int], cut_l
         for r, ln in enumerate(chunk):
             stop = crit.stop_len[r]
             results[ln] = new[r][:stop] if stop is not None else new[r][:max_new_tokens]
-        del cache
+        del cache, gen
+        if torch.cuda.is_available():
+            # Every batch allocates differently sized buffers; without this the caching allocator keeps them all
+            # reserved (observed 7.8 GB dedicated + 5 GB spilled to shared memory on Windows).
+            torch.cuda.empty_cache()
+    del layers
     return results
 
 
