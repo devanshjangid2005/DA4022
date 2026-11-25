@@ -90,7 +90,84 @@ Paper-reported test results (Table 6, mean of 5 seeds; "Avg@5" = mean accuracy):
 
 ## Results
 
-_Runs in progress (GSM8K and MATH-500 replay, plus the live latency and memory benchmark). Result tables will be added here and in `Performance_Metrics/results/st_es.csv`._
+All local numbers use DeepSeek-R1-Distill-Qwen-1.5B with one seed (42). Replay numbers come from offline replay over cached generations, as in the paper. Latency and memory come only from the live run. Paper-reported numbers are in the table above and come from different, larger models.
+
+- **Machine-readable rows:** [`Performance_Metrics/results/st_es.csv`](../../../Performance_Metrics/results/st_es.csv)
+- **Full outputs:** [`experiments/st_es/results/`](../../experiments/st_es/results/), with the calibration sweep, test table, paired comparisons, live summary, plots and provenance including trace sha256 values.
+
+### GSM8K
+
+**Calibration.** On 200 `text.gsm8k.train` problems, standard generation scores 0.875 with 1508 mean tokens. Calibration then selects:
+
+| Target | ST-ES config | Step-count config |
+|---|---|---|
+| 85% | verification, δ=0 | k=14 |
+| 90% | verification, δ=0 | k=16 |
+| 95% | exploration, δ=0 | k=20 |
+
+**Held-out test, replay** (200 `text.gsm8k.test` problems, token cap 4096; 28 of the standard traces hit the cap). Δ is the paired-bootstrap 95% interval against standard.
+
+| Config | Accuracy | Δ vs standard [95% CI] | Mean generated tokens | Tokens saved | Stop rate |
+|---|---:|---|---:|---:|---:|
+| Standard | 0.830 | – | 1785.8 | – | 0 |
+| **ST-ES 85%/90%: verification, δ=0** | 0.815 | −1.5 [−5.5, +2.0] | 779.3 | **56.4%** | 0.91 |
+| **ST-ES 95%: exploration, δ=0** | 0.830 | 0.0 [−3.0, +3.5] | 921.8 | **48.4%** | 0.71 |
+| Step-count 85%: k=14 | 0.750 | −8.0 [−13.0, −3.0] | 737.1 | 58.7% | 0.77 |
+| Step-count 90%: k=16 | 0.795 | −3.5 [−7.5, +0.5] | 814.8 | 54.4% | 0.69 |
+| Step-count 95%: k=20 | 0.840 | +1.0 [−3.0, +5.0] | 947.3 | 47.0% | 0.58 |
+
+**ST-ES minus step-count at the same target** (paired bootstrap):
+
+| Target | Difference [95% CI] | Tokens, ST-ES vs step-count |
+|---|---|---|
+| 85% | **+6.5 points [+2.0, +11.5]** | 779 vs 737 |
+| 90% | +2.0 [−2.0, +6.5] | 779 vs 815 |
+| 95% | −1.0 [−4.5, +2.5] | 922 vs 947 |
+
+So, on held-out GSM8K, ST-ES halves the generated tokens with no statistically significant accuracy loss against standard generation. It beats the paper's step-count baseline at the most aggressive target, and matches it at the other two. This agrees in direction with the paper (20–50% savings; ST-ES at or above the token-count baseline), but the edge over the baseline is smaller here and only significant at 85%.
+
+**Live, measured** (first 30 problems of the same test subset; batch 1; RTX 4060 Laptop GPU, bf16, on AC power; one warm-up request; prompt token IDs on the GPU to final answer, including tagging and the forced answer):
+
+| Policy | Accuracy | Mean tokens | Latency median | Latency mean | Latency p95 | TTFT median | Tokens/s | Peak allocated |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| Standard | 0.900 | 1564 | 45.2 s | 56.7 s | 123.1 s | 44 ms | 27.6 | 3599 MB |
+| ST-ES 90% (verification, δ=0) | 0.700 | 834 | **21.5 s** | **30.5 s** | 85.2 s | 43 ms | 27.4 | 3599 MB |
+
+- **Latency.** Median latency falls by 52% and mean latency by 46%, roughly in proportion to the generated tokens; the decode speed is unchanged.
+- **Tagger cost.** The tagger costs 0.2 ms per step (0.1 s over all 30 requests).
+- **Peak memory.** Peak memory is the same, because the maximum comes from a request where no verification step occurred and generation ran to the 4096-token cap.
+- **Accuracy (30 problems, small sample).** Live accuracy dropped 20 points; on the same 30 problems, the replay traces show no drop (0.867 for both).
+  - The live and replay runs sample different traces (batch 1 versus batched generation).
+  - All six live disagreements are early stops (173–511 tokens) with a wrong forced answer.
+  - A CPU test confirms that the live answer-forcing path (KV-cache reuse) gives the same tokens as the replay path (fresh prefill).
+  - We read the gap as variance in where the first "verification" step appears, amplified by the approximate tagger. The 200-problem replay is the accuracy estimate we rely on.
+- **Measurement caveat.** Two of the 30 live requests (problems 2–3) overlapped with CPU-heavy replay jobs on the same machine, so their latency may be slightly inflated.
+
+### MATH-500
+
+_Traces are generated (150 MATH train / 150 MATH-500 problems, cap 8192). Replay, live benchmark and results are pending._
+
+### Tagger agreement with the paper's annotator
+
+On 99 DS-14B MATH500 steps labelled by GPT-4o-mini (released by the authors), the rule-based tagger agrees on 40.4% of 14-way labels. One-vs-rest macro-F1 per step type:
+
+| Step type | Macro-F1 |
+|---|---:|
+| exploration | 0.88 |
+| final conclusion | 0.84 |
+| formula substitution | 0.77 |
+| self-talk | 0.69 |
+| verification | 0.63 |
+| problem re-statement | 0.63 |
+| other types | 0.48–0.69 |
+
+### Template summary
+
+| Source | Quality | Latency | Throughput | Peak memory | Energy | Notes |
+|---|---:|---:|---:|---:|---:|---|
+| Paper-reported | see table above (Avg@5) | not reported | not reported | not reported | not reported | 8B/14B/32B models, 5 seeds; runtime only estimated (App. F) |
+| Local baseline (GSM8K) | 0.830 replay / 0.900 live | 45.2 s median | 27.6 tok/s | 3599 MB | not measured | replay n=200, live n=30 |
+| Local method (GSM8K) | 0.815 replay / 0.700 live | 21.5 s median | 27.4 tok/s | 3599 MB | not measured | verification δ=0; `approximate` (rule-based tagger) |
 
 ## Differences and limitations
 

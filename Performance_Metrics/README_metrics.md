@@ -51,6 +51,14 @@ experiment_id,paper_id,method,commit,backbone_id,backbone_revision,dataset_id,sp
 
 Unknown/not-measured quantities should be empty/null plus a `status` or notes entry—never `0` unless zero was actually measured.
 
+### Result files
+
+| Paper / method | File | Rows |
+|---|---|---|
+| Step-Tagging Early-Stopping (ST-ES), `Adaptive_Stopping/` | [`results/st_es.csv`](results/st_es.csv) | Replay rows (quality and generated tokens on held-out subsets, no runtime) and live rows (measured latency, throughput and peak memory at batch size 1), each with its no-stopping baseline. Details: [`Adaptive_Stopping/methods/step_tagging/PAPER_CARD.md`](../Adaptive_Stopping/methods/step_tagging/PAPER_CARD.md). |
+
+Shared quality scorers live in [`quality/`](quality/): `math_answer.py` checks math final answers with Math-Verify.
+
 ## Recommended plots
 
 - quality vs. latency;
