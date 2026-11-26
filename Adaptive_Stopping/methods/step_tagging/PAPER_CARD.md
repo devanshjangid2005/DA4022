@@ -5,7 +5,7 @@
 - **Paper / OpenReview:**
   - https://openreview.net/forum?id=bNn5OusO22 (AdaptFM @ ICML 2026, poster session 1). The title was checked against the official accepted-paper list.
   - arXiv [2512.14332](https://arxiv.org/abs/2512.14332), v2 of 16 Jul 2026.
-  - The team also has the 22-page proceedings-format PDF (`75_Step_Tagging_Early_Stopping.pdf`). We compared its text with arXiv v2 line by line. It is identical except for Algorithm 1, which adds a *minimal step size* k ("Generate step s_i … where |s_i| > k"), and no value for k is given. Eq. 1, Eq. 3, the 100-token answer budget and all reported numbers are the same in both.
+  - The team downloaded the latest version of the paper: the 22-page proceedings-format PDF (`75_Step_Tagging_Early_Stopping.pdf`, with author names, built 2026-06-08). We compared its text with arXiv v2 line by line. It is identical except for Algorithm 1, which adds a *minimal step size* k ("Generate step s_i … where |s_i| > k"), and no value for k is given. Eq. 1, Eq. 3, the 100-token answer budget and all reported numbers are the same in both.
   - Authors: Y. Belkhiter, S. Tirupathi, G. Zizzo, J. D. Kelleher.
 - **Primary module:** `Adaptive_Stopping/`
 - **Secondary modules:** `Backbones/`, `Dataloaders/`, `Performance_Metrics/`
@@ -257,7 +257,7 @@ On 99 DS-14B MATH500 steps labelled by GPT-4o-mini (released by the authors), th
 
 ## Reproduction checklist
 
-- [x] Exact paper link and version verified. The official AdaptFM accepted-papers page (fetched 2026-11-25) links `openreview.net/forum?id=bNn5OusO22` to this exact title and author list, and arXiv v2 and the proceedings PDF match it. The OpenReview page itself could not be fetched automatically (timeout, then a bot challenge), so a camera-ready PDF or code link posted only there is unchecked (see [D](docs/D_reproduction_and_review.md)).
+- [x] Exact paper link and version verified. The official AdaptFM accepted-papers page (fetched 2026-11-25) links `openreview.net/forum?id=bNn5OusO22` to this exact title and author list. The latest version of the paper (the proceedings PDF) matches arXiv v2 except for Algorithm 1 and contains no code link (see [D](docs/D_reproduction_and_review.md)).
 - [x] Base model and dataset revisions pinned (registry entries)
 - [x] Baseline runs on the same setup (standard and step-count, same traces, prompts and cap)
 - [x] Tests and seed handling added

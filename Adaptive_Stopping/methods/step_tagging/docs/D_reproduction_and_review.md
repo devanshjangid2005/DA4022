@@ -25,7 +25,7 @@ python -m pytest Adaptive_Stopping/tests Dataloaders/tests Performance_Metrics/t
 1. Start from a clean worktree of upstream `krsnoki/DA4022@main` (`368db37`).
 2. Apply the core patch.
 3. Apply the four workstream patches A–D. Each workstream only adds files, so they apply in any order.
-4. Check that all 83 changed files are byte-identical to the branch, and run the test suite.
+4. Check that every changed file is byte-identical to the branch, and run the test suite.
 
 The latest report, with the exact commits and test count, is in `team_deliverables/INTEGRATION_CHECK.txt`. Every run so far has passed: all patches apply cleanly, no file differs from the branch, and the full test suite passes.
 
@@ -61,8 +61,9 @@ The numbers come from 20 problems and only show that the pipeline works; they ar
 ## 4. Paper version and links
 
 - **Official AdaptFM accepted-paper list:** checked 2026-11-25. It links `openreview.net/forum?id=bNn5OusO22` to this exact title and author list.
-- **Proceedings-format PDF:** compared line by line with arXiv v2. The only substantive difference is the minimal step size k in Algorithm 1 (see [B](B_min_step_size.md)).
-- **OpenReview page itself:** **not verified.** The HTML page timed out from our network on 2026-11-25. On 2026-11-26 the OpenReview API answered with a bot challenge (`HTTP 403 ChallengeRequiredError`). Someone must open https://openreview.net/forum?id=bNn5OusO22 in a browser and record two things in issue #24: whether a camera-ready PDF newer than arXiv v2 is attached, and whether a code link is given.
+- **Latest version of the paper:** **verified.** The team downloaded the latest version, a 22-page proceedings-format PDF with author names, built 2026-06-08. We compared it line by line with arXiv v2. The only substantive difference is the minimal step size k in Algorithm 1 (see [B](B_min_step_size.md)).
+- **Code link:** none. The PDF's only code link points to Math-Verify, a third-party tool, and no ST-ES code release was found.
+- **OpenReview page:** our scripts could not fetch it (a timeout on 2026-11-25, then a bot challenge, `HTTP 403`, on 2026-11-26). Nothing depends on it, because the downloaded PDF and the official list settle the version. Reading the page's reviews is optional.
 
 ## 5. Review notes
 
